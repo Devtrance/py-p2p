@@ -20,6 +20,6 @@ class UDP(object):
             data = data[20:]
             self.handlers.fire(data, addr)
 
-    def send(self, msg, to):
+    def send(self, msg, dst):
         msg = hashlib.sha1(msg).digest() + msg
-        self.sock.sendto(msg, (to, self.port))
+        self.sock.sendto(msg, dst)
