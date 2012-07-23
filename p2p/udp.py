@@ -1,4 +1,3 @@
-import json
 import socket
 import thread
 import hashlib
@@ -20,3 +19,7 @@ class UDP(object):
                 continue # bad packet, ignore it
             data = data[20:]
             self.handlers.fire(data, addr)
+
+    def send(self, msg, to):
+        msg = hashlib.sha1(msg).digest() + msg
+        self.sock.sendto(msg, (to, self.port))
