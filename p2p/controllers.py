@@ -62,7 +62,7 @@ class Broadcaster(object):
         msg['data'] = data
         msg['type'] = 'oncedata'
         dst = random.choice(self.peers.keys())
-        self._send(dst, msg)
+        self._send(msg, dst)
 
     def handle_msg(self, msg, addr):
         '''
@@ -133,7 +133,12 @@ class Broadcaster(object):
             elif msg['type'] == 'oncedata':
                 data = msg.get('data', None)
                 if data:
-                    self.event.fire(msg['data'])
+                    def reply(data):
+                        msg = self.mkmsg()
+                        msg['type'] = 'oncedata'
+                        msg['data'] = data
+                        self._send(msg, addr)
+                    self.event.fire(data, reply=reply)
 
     def hi(self, addr):
         msg = self.mkmsg()
