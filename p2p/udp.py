@@ -18,7 +18,7 @@ class UDP(object):
             if data[:20] != hashlib.sha1(data[20:]).digest():
                 continue # bad packet, ignore it
             data = data[20:]
-            self.handlers.fire(data, addr)
+            thread.start_new_thread(self.handlers.fire, (data, addr))
 
     def send(self, msg, dst):
         msg = hashlib.sha1(msg).digest() + msg

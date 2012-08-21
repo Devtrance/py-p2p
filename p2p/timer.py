@@ -25,7 +25,10 @@ class Timer(object):
             self.t = ThreadTimer(self.interval, tick)
             self.t.daemon = True
             self.t.start()
-        tick()
+        try:
+            tick()
+        except:
+            pass
 
     def disable(self):
         if self.t:

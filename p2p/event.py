@@ -1,3 +1,5 @@
+import thread
+
 class Event(object):
     def __init__(self):
         self.hooks = []
@@ -12,7 +14,10 @@ class Event(object):
 
     def fire(self, *args, **kwargs):
         for hook in self.hooks:
-            hook(*args, **kwargs)
+            try:
+                thread.start_new_thread(hook, args, kwargs)
+            except:
+                continue
 
     def clear(self):
         self.hooks = []
