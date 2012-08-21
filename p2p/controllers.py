@@ -16,7 +16,7 @@ class Broadcaster(object):
     Except "designed" doesn't really convey the amount of flailing
     going on, here.
     '''
-    def __init__(self, bootstrap=(), port=6966, k=4):
+    def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=4):
         self.peers = {}
         self.possibles = set()
         self.id = uuid.uuid4().hex
@@ -25,7 +25,7 @@ class Broadcaster(object):
         self.udp.handlers += self.handle_msg
         self.k = k
         self.lock = threading.RLock()
-        self.timer = timer.Timer(0.5)
+        self.timer = timer.Timer(heartbeat)
         self.timer += self.ping_all
         self.timer += self.find_friends
         self.timer += self.dump_baggage
@@ -94,14 +94,11 @@ class Broadcaster(object):
                 newmsg = self.mkmsg(msg['stamp'])
                 newmsg['type'] = 'newguy'
                 newmsg['id'] = msg['id']
-                if newmsg.get('src', None):
-                    newmsg['src'] = msg['src']
-                else:
-                    newmsg['src'] = addr
+                src = msg.get('src', None) or addr
+                src = src[0], src[1]
+                newmsg['src'] = src
                 self.broadcast(newmsg)
-                snd = msg.get('src', None) or addr
-                snd = snd[0], snd[1]
-                self.hi(snd)
+                self.hi(src)
             elif msg['type'] == 'needfriend':
                 newmsg = self.mkmsg(msg['stamp'])
                 newmsg['type'] = 'needfriend'
