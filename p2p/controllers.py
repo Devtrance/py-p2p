@@ -51,7 +51,7 @@ class Broadcaster(object):
         msg['type'] = 'newguy'
         self._send(msg, addr)
 
-    def send(data):
+    def send(self, data):
         msg = self.mkmsg()
         msg['data'] = data
         msg['type'] = 'data'
