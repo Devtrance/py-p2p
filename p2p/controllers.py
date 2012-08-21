@@ -49,7 +49,7 @@ class Broadcaster(object):
     def bootstrap(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'newguy'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
     def send(data):
         msg = self.mkmsg()
@@ -127,22 +127,22 @@ class Broadcaster(object):
     def hi(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'hi'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
     def bye(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'bye'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
     def needfriend(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'needfriend'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
     def broadcast(self, msg):
         with self.lock:
             for peer in self.peers:
-                self.send(msg, peer)
+                self._send(msg, peer)
 
     def dump_baggage(self):
         with self.lock:
@@ -178,14 +178,14 @@ class Broadcaster(object):
     def ping(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'ping'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
     def pong(self, addr):
         msg = self.mkmsg()
         msg['type'] = 'pong'
-        self.send(msg, addr)
+        self._send(msg, addr)
 
-    def send(self, msg, addr):
+    def _send(self, msg, addr):
         self.seen.add(msg['stamp'])
         msg = json.dumps(msg)
         self.udp.send(msg, addr)
