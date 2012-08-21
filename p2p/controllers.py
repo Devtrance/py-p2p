@@ -165,7 +165,6 @@ class Broadcaster(object):
     def find_friends(self):
         with self.lock: 
             if len(self.peers) < self.k and len(self.peers) > 0:
-                print "I (%s) need a friend (%d)"%(self.id, len(self.peers))
                 msg = self.mkmsg()
                 msg['type'] = 'needfriend'
                 self.broadcast(msg)
