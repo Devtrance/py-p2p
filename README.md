@@ -33,8 +33,8 @@ token = None
 # in order to connect to the p2p network, we first need the address
 # of a server that's already in that network.  it's possible to
 # start a new network and then join a network later, but for now we'll
-# pretend that a network is already running.
-#
+# pretend that a network is already running.  to start a new network,
+# just pass nothing or an empty tuple, (), to Broadcaster
 bootstrap_server = ('bs.example.org', 6966)
 b = Broadcaster(bootstrap_server)
 
