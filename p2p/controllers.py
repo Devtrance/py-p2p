@@ -7,6 +7,7 @@ import time
 
 import udp
 import timer
+import event
 
 class Broadcaster(object):
     '''
@@ -17,6 +18,7 @@ class Broadcaster(object):
     going on, here.
     '''
     def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=4):
+        # XXX clean up self.possibles and self.seen regularly (every heartbeat?)
         self.peers = {}
         self.possibles = set()
         self.id = uuid.uuid4().hex
@@ -30,6 +32,7 @@ class Broadcaster(object):
         self.timer += self.find_friends
         self.timer += self.dump_baggage
         self.timer.start()
+        self.event = event.Event()
         if bootstrap:
             self.bootstrap(bootstrap)
 
@@ -47,6 +50,12 @@ class Broadcaster(object):
         msg = self.mkmsg()
         msg['type'] = 'newguy'
         self.send(msg, addr)
+
+    def send(data):
+        msg = self.mkmsg()
+        msg['data'] = data
+        msg['type'] = 'data'
+        self.broadcast(msg)
 
     def handle_msg(self, msg, addr):
         '''
@@ -109,6 +118,11 @@ class Broadcaster(object):
                 self.broadcast(newmsg)
                 if len(self.peers) < self.k and not src in self.peers:
                     self.hi(src)
+            elif msg['type'] == 'data':
+                self.broadcast(msg)
+                data = msg.get('data', None)
+                if data:
+                    self.event.fire(msg['data'])
 
     def hi(self, addr):
         msg = self.mkmsg()
