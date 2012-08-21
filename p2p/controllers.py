@@ -57,6 +57,13 @@ class Broadcaster(object):
         msg['type'] = 'data'
         self.broadcast(msg)
 
+    def send_one(self, data):
+        msg = self.mkmsg()
+        msg['data'] = data
+        msg['type'] = 'oncedata'
+        dst = random.choice(self.peers.keys())
+        self._send(dst, msg)
+
     def handle_msg(self, msg, addr):
         '''
         msg is a json-encoded message, and addr is an (ip, port) tuple
@@ -120,6 +127,10 @@ class Broadcaster(object):
                     self.hi(src)
             elif msg['type'] == 'data':
                 self.broadcast(msg)
+                data = msg.get('data', None)
+                if data:
+                    self.event.fire(msg['data'])
+            elif msg['type'] == 'oncedata':
                 data = msg.get('data', None)
                 if data:
                     self.event.fire(msg['data'])
