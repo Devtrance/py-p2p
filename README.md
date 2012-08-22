@@ -37,6 +37,7 @@ token = None
 # just pass nothing or an empty tuple, (), to Broadcaster
 bootstrap_server = ('bs.example.org', 6966)
 b = Broadcaster(bootstrap_server)
+b.start()
 
 # now we define some reactors.  each reactor will be called every
 # time we receive a data packet.  since we're just passing a token

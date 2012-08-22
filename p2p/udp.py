@@ -1,4 +1,5 @@
 import socket
+import errno
 import thread
 import hashlib
 
@@ -8,13 +9,20 @@ class UDP(object):
     def __init__(self, port):
         self.port = port
         self.handlers = Event()
+
+    def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("", port))
+        self.sock.bind(("", self.port))
         thread.start_new_thread(self.recv, ())
 
     def recv(self):
         while True:
-            data, addr = self.sock.recvfrom(65535) # max udp size
+            try:
+                data, addr = self.sock.recvfrom(65535) # max udp size
+            except socket.error as e:
+                if e[0] == errno.EBADF:
+                    return
+                continue
             if data[:20] != hashlib.sha1(data[20:]).digest():
                 continue # bad packet, ignore it
             data = data[20:]
@@ -23,3 +31,7 @@ class UDP(object):
     def send(self, msg, dst):
         msg = hashlib.sha1(msg).digest() + msg
         self.sock.sendto(msg, dst)
+
+    def shutdown(self):
+        self.sock.shutdown(socket.SHUT_RDWR)
+        self.sock.close()

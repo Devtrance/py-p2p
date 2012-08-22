@@ -17,7 +17,7 @@ class Broadcaster(object):
     Except "designed" doesn't really convey the amount of flailing
     going on, here.
     '''
-    def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=4):
+    def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=20):
         # XXX clean up self.possibles and self.seen regularly (every heartbeat?)
         self.peers = {}
         self.possibles = set()
@@ -31,10 +31,21 @@ class Broadcaster(object):
         self.timer += self.ping_all
         self.timer += self.find_friends
         self.timer += self.dump_baggage
-        self.timer.start()
         self.event = event.Event()
-        if bootstrap:
-            self.bootstrap(bootstrap)
+        self.boot = bootstrap
+
+    def start(self):
+        self.udp.start()
+        if self.boot:
+            self.bootstrap(self.boot)
+        self.timer.start()
+
+    def stop(self):
+        with self.lock:
+            for p in self.peers:
+                self.bye(p)
+            self.timer.disable()
+            self.udp.shutdown()
 
     def mkmsg(self, stamp=None):
         msg = {}
