@@ -16,8 +16,7 @@ class MRQ(object):
     def add(self, obj):
         if obj in self.set:
             # this is slow...
-            idx = self.list.index(obj)
-            self.list = self.list[:idx] + self.list[idx+1:]
+            self.list.remove(obj)
             self.list.append(obj)
             return
         self.list.append(obj)
