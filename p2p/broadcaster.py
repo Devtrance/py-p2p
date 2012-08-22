@@ -8,6 +8,7 @@ import time
 import udp
 import timer
 import event
+import mrq
 
 class Broadcaster(object):
     '''
@@ -18,12 +19,11 @@ class Broadcaster(object):
     going on, here.
     '''
     def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=20):
-        # XXX clean up self.possibles and self.seen regularly (every heartbeat?)
         self.peers = {}
-        self.possibles = set()
+        self.possibles = mrq.MRQ(50)
         self.id = uuid.uuid4().hex
         self.udp = udp.UDP(port)
-        self.seen = set()
+        self.seen = mrq.MRQ(2500)
         self.udp.handlers += self.handle_msg
         self.k = k
         self.lock = threading.RLock()
@@ -80,11 +80,11 @@ class Broadcaster(object):
         msg is a json-encoded message, and addr is an (ip, port) tuple
         '''
         with self.lock:
-            self.possibles.add(addr)
+            self.possibles += addr
             msg = json.loads(msg)
             if msg['stamp'] in self.seen:
                 return
-            self.seen.add(msg['stamp'])
+            self.seen += msg['stamp']
             #print "%s >> %s: %s"%(msg['id'], self.id, msg['type'])
             if msg['type'] == 'bounce':
                 self.broadcast(msg)
@@ -212,6 +212,6 @@ class Broadcaster(object):
         self._send(msg, addr)
 
     def _send(self, msg, addr):
-        self.seen.add(msg['stamp'])
+        self.seen += msg['stamp']
         msg = json.dumps(msg)
         self.udp.send(msg, addr)
