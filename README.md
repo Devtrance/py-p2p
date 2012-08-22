@@ -26,7 +26,7 @@ shared among all machines in the network, and can be updated by any
 individual machine.
 
 ```python
-from p2p.controllers import Broadcaster # the broadcaster overlay
+from p2p import Broadcaster # the broadcaster overlay
 
 token = None
 
