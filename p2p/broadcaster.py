@@ -72,8 +72,12 @@ class Broadcaster(object):
         msg = self.mkmsg()
         msg['data'] = data
         msg['type'] = 'oncedata'
-        dst = random.choice(self.peers.keys())
-        self._send(msg, dst)
+        dst = None
+        with self.lock:
+            if len(self.peers) > 0:
+                dst = random.choice(self.peers.keys())
+        if dst:
+            self._send(msg, dst)
 
     def handle_msg(self, msg, addr):
         '''
