@@ -18,7 +18,7 @@ class Broadcaster(object):
     Except "designed" doesn't really convey the amount of flailing
     going on, here.
     '''
-    def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=20):
+    def __init__(self, bootstrap=(), port=6966, heartbeat=30, k=20, joincb=None):
         self.peers = {}
         self.possibles = mrq.MRQ(50)
         self.id = uuid.uuid4().hex
@@ -33,6 +33,7 @@ class Broadcaster(object):
         self.timer += self.dump_baggage
         self.event = event.Event()
         self.boot = bootstrap
+        self.joincb = joincb
 
     def start(self):
         self.udp.start()
@@ -121,6 +122,9 @@ class Broadcaster(object):
                     snd = snd[0], snd[1]
                     self.peers[snd] = dict(id=msg['id'], exp=0)
                     self.pong(snd)
+                    if len(self.peers) == 1 and self.joincb:
+                        self.joincb()
+                        self.joincb = None
             elif msg['type'] == 'newguy':
                 newmsg = self.mkmsg(msg['stamp'])
                 newmsg['type'] = 'newguy'
