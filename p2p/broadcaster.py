@@ -90,6 +90,11 @@ class Broadcaster(object):
             if msg['stamp'] in self.seen:
                 return
             self.seen += msg['stamp']
+            def reply(data):
+                msg = self.mkmsg()
+                msg['type'] = 'oncedata'
+                msg['data'] = data
+                self._send(msg, addr)
             #print "%s >> %s: %s"%(msg['id'], self.id, msg['type'])
             if msg['type'] == 'bounce':
                 self.broadcast(msg)
@@ -148,16 +153,10 @@ class Broadcaster(object):
                 self.broadcast(msg)
                 data = msg.get('data', None)
                 if data:
-                    self.event.fire(msg['data'])
+                    self.event.fire(msg['data'], reply=reply)
             elif msg['type'] == 'oncedata':
                 data = msg.get('data', None)
-                if data:
-                    def reply(data):
-                        msg = self.mkmsg()
-                        msg['type'] = 'oncedata'
-                        msg['data'] = data
-                        self._send(msg, addr)
-                    self.event.fire(data, reply=reply)
+                self.event.fire(data, reply=reply)
 
     def hi(self, addr):
         msg = self.mkmsg()
