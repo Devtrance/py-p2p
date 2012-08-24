@@ -30,8 +30,16 @@ class UDP(object):
 
     def send(self, msg, dst):
         msg = hashlib.sha1(msg).digest() + msg
-        self.sock.sendto(msg, dst)
+        try:
+            self.sock.sendto(msg, dst)
+        except socket.error as e:
+            if e[0] == errno.EPIPE:
+                self.shutdown()
+                self.start()
 
     def shutdown(self):
-        self.sock.shutdown(socket.SHUT_RDWR)
-        self.sock.close()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+            self.sock.close()
+        except: # nobody cares
+            pass
