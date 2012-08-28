@@ -94,7 +94,9 @@ class Broadcaster(object):
                 msg = self.mkmsg()
                 msg['type'] = 'oncedata'
                 msg['data'] = data
-                self._send(msg, addr)
+                src = msg.get('src', None) or addr
+                src = src[0], src[1]
+                self._send(msg, src)
             #print "%s >> %s: %s"%(msg['id'], self.id, msg['type'])
             if msg['type'] == 'bounce':
                 self.broadcast(msg)
@@ -140,16 +142,16 @@ class Broadcaster(object):
                 self.broadcast(newmsg)
                 self.hi(src)
             elif msg['type'] == 'needfriend':
-                newmsg = self.mkmsg(msg['stamp'])
-                newmsg['type'] = 'needfriend'
-                newmsg['id'] = msg['id']
                 src = msg.get('src', None) or addr
                 src = src[0], src[1]
-                newmsg['src'] = src
-                self.broadcast(newmsg)
+                msg['src'] = src
+                self.broadcast(msg)
                 if len(self.peers) < self.k and not src in self.peers:
                     self.hi(src)
             elif msg['type'] == 'data':
+                src = msg.get('src', None) or addr
+                src = src[0], src[1]
+                msg['src'] = src
                 self.broadcast(msg)
                 data = msg.get('data', None)
                 if data:
