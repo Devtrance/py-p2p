@@ -85,8 +85,14 @@ class Broadcaster(object):
         msg is a json-encoded message, and addr is an (ip, port) tuple
         '''
         with self.lock:
-            self.possibles += addr
             msg = json.loads(msg)
+            src = msg.get('src', None) or addr
+            src = src[0], src[1]
+            if not msg.get('src', None):
+                msg['src'] = src
+            else:
+                self.possibles += src
+            self.possibles += addr
             if msg['stamp'] in self.seen:
                 return
             self.seen += msg['stamp']
@@ -94,64 +100,48 @@ class Broadcaster(object):
                 msg = self.mkmsg()
                 msg['type'] = 'oncedata'
                 msg['data'] = data
-                src = msg.get('src', None) or addr
-                src = src[0], src[1]
                 self._send(msg, src)
             #print "%s >> %s: %s"%(msg['id'], self.id, msg['type'])
             if msg['type'] == 'bounce':
                 self.broadcast(msg)
             if msg['type'] == 'ping':
-                if not addr in self.peers:
+                if not src in self.peers:
                     pass
-                pd = self.peers.get(addr, {})
+                pd = self.peers.get(src, {})
                 pd['id'] = msg['id']
-                self.peers[addr] = pd
-                self.pong(addr)
+                self.peers[src] = pd
+                self.pong(src)
             elif msg['type'] == 'bye':
-                if addr in self.peers:
-                    del self.peers[addr]
+                if src in self.peers:
+                    del self.peers[src]
                 if len(self.peers) == 0:
                     # we have a right to be bitchy
-                    self.bootstrap(addr)
+                    self.bootstrap(src)
             elif msg['type'] == 'pong':
-                if not addr in self.peers:
+                if not src in self.peers:
                     if len(self.peers) >= self.k:
                         kick = random.choice(self.peers.keys())
                         del self.peers[kick]
                         self.bye(kick)
-                pd = self.peers.get(addr, {})
+                pd = self.peers.get(src, {})
                 pd['exp'] = 0
                 pd['id'] = msg['id']
-                self.peers[addr] = pd
+                self.peers[src] = pd
             elif msg['type'] == 'hi':
                 if len(self.peers) < self.k:
-                    snd = msg.get('src', None) or addr
-                    snd = snd[0], snd[1]
-                    self.peers[snd] = dict(id=msg['id'], exp=0)
-                    self.pong(snd)
+                    self.peers[src] = dict(id=msg['id'], exp=0)
+                    self.pong(src)
                     if len(self.peers) == 1 and self.joincb:
                         self.joincb()
                         self.joincb = None
             elif msg['type'] == 'newguy':
-                newmsg = self.mkmsg(msg['stamp'])
-                newmsg['type'] = 'newguy'
-                newmsg['id'] = msg['id']
-                src = msg.get('src', None) or addr
-                src = src[0], src[1]
-                newmsg['src'] = src
-                self.broadcast(newmsg)
+                self.broadcast(msg)
                 self.hi(src)
             elif msg['type'] == 'needfriend':
-                src = msg.get('src', None) or addr
-                src = src[0], src[1]
-                msg['src'] = src
                 self.broadcast(msg)
                 if len(self.peers) < self.k and not src in self.peers:
                     self.hi(src)
             elif msg['type'] == 'data':
-                src = msg.get('src', None) or addr
-                src = src[0], src[1]
-                msg['src'] = src
                 self.broadcast(msg)
                 data = msg.get('data', None)
                 if data:
