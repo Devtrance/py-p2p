@@ -43,7 +43,7 @@ class TCP(object):
         buff = ""
         while True:
             msg, buff = self.read_msg(conn, buff)
-            self.handlers.threadfire(msg, conn)
+            self.handlers.fire(msg, conn)
 
     def read_msg(self, conn, buff=""):
         while len(buff) < 4:
