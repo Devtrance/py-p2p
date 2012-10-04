@@ -4,11 +4,13 @@ import random
 import threading
 import uuid
 import time
+import base64
 
 import udp
 import timer
 import event
 import mrq
+import itc
 
 class Broadcaster(object):
     '''
@@ -32,6 +34,25 @@ class Broadcaster(object):
         self.handlers = event.Event()
         self.boot = bootstrap
         self.joincb = joincb
+        self.clock = None
+        # maekawa state variables
+        self.acqcb = None
+        self.grant = None
+        self.maeq = []
+        self.mutexed = False
+        self.fails = []
+        self.yields = []
+        self.grants = []
+
+    def base(self):
+        self.value = self.lace_max = (1, 1)
+        self.clock = itc.Stamp()
+
+    def dumpstamp(self, stamp):
+        return base64.b64encode(stamp.dump())
+
+    def loadstamp(self, stampstr):
+        return itc.Stamp.load(base64.b64decode(stampstr))
 
     def start(self):
         self.udp.start()
@@ -46,11 +67,13 @@ class Broadcaster(object):
             self.timer.disable()
             self.udp.shutdown()
 
-    def mkmsg(self):
+    def mkmsg(self, msgtype='noop'):
         msg = {}
-        msg['type'] = 'noop'
+        msg['type'] = msgtype
         msg['id'] = (self.id, self.value)
         msg['stamp'] = uuid.uuid4().int
+        if self.clock:
+            msg['clock'] = self.dumpstamp(self.clock.peek())
         return msg
 
     def send(self, data):
@@ -86,6 +109,8 @@ class Broadcaster(object):
             'newlm': self.handle_msg_newlm,
             'newpeer': self.handle_msg_newpeer,
             'needpeer': self.handle_msg_needpeer,
+            'recon': self.handle_msg_recon,
+            'maekawa': self.handle_msg_maekawa,
         }
         with self.lock:
             msg = json.loads(msg)
@@ -142,12 +167,115 @@ class Broadcaster(object):
             return True
         return False
 
+    def acquire(self, acqcb=None):
+        self.acqcb = acqcb
+        msg = self.mkmsg('maekawa')
+        msg['maekawa'] = 'request'
+        self.broadcast(msg)
+
+    def release(self):
+        with self.lock:
+            if not self.mutexed:
+                return
+            self.mutexed = False
+            msg = self.mkmsg('maekawa')
+            msg['maekawa'] = 'release'
+            self.broadcast(msg)
+
+    class mutob(object):
+        def __init__(self, bc):
+            self.bc = bc
+            self.ev = threading.Event()
+
+        def __enter__(self):
+            self.bc.acquire(self.ev.set)
+            a = self.ev.wait(1)
+            if not a:
+                print "fail on", self.bc.udp.sock.getsockname()[1]
+                raise RuntimeError
+
+        def __exit__(self, type, value, traceback):
+            self.bc.release()
+
+    def mutex(self):
+        return self.mutob(self)
+
+    def handle_msg_maekawa(self, msg, addr, reply):
+        '''
+        Implements Maekawa's distributed mutex.
+        '''
+        if not addr in self.peers:
+            # who the hell is this?
+            print "bad msg", msg['id'][1]
+            return
+        if not msg.has_key('maekawa'):
+            print "what the fuck"
+            print msg
+            return
+        nmsg = self.mkmsg('maekawa')
+        if msg['maekawa'] == 'request':
+            if not self.grant:
+                nmsg['maekawa'] = 'grant'
+                self.grant = addr
+            else:
+                self.maeq.append(addr)
+                if self.peers[self.grant][0] > msg['id'][0]:
+                    # current grant has greater "priority"
+                    nmsg['maekawa'] = 'fail'
+                else:
+                    nmsg['maekawa'] = 'inquire'
+        elif msg['maekawa'] == 'grant':
+            self.grants.append(addr)
+            if len(self.grants) == len(self.peers):
+                self.mutexed = True
+                self.fails = []
+                self.yields = []
+                self.grants = []
+                if self.acqcb:
+                    self.acqcb()
+                self.acqcb = None
+            return
+        elif msg['maekawa'] == 'inquire':
+            if len(self.fails) > 0 or len(self.yields) > 0:
+                nmsg['maekawa'] = 'yield'
+            else:
+                return # no answer?
+        elif msg['maekawa'] == 'yield':
+            self.maeq.append(addr)
+            addr = self.maeq.pop()
+        elif msg['maekawa'] == 'release':
+            if addr != self.grant:
+                print "what"
+                return
+            self.grant = None
+            if addr in self.maeq:
+                self.maeq.remove(addr)
+            if self.maeq:
+                addr = self.maeq.pop()
+                self.grant = addr
+                nmsg['maekawa'] = 'grant'
+            else:
+                return
+        elif msg['maekawa'] == 'fail':
+            self.fails.append(addr)
+            return
+        self.sendmsg(nmsg, addr)
+
     def handle_msg_newlm(self, msg, addr, reply):
         '''
         Handle 'newlm' message, bumping the lace_max
         '''
         self.broadcast(msg)
         self.lace_max = tuple(msg['newlm'])
+
+    def handle_msg_recon(self, msg, addr, reply):
+        '''
+	    The 'reconnect' message; just start all over and grab new
+    	state.
+        '''
+        self.value = self.lace_max = (0, 0)
+        self.stamp = None
+        self.bootstrap([addr])
 
     def handle_msg_needpeer(self, msg, addr, reply):
         '''
@@ -156,6 +284,12 @@ class Broadcaster(object):
         self.broadcast(msg)
         if not self.ispeer(msg['id'][1]):
             # not a concern of ours
+            return
+        if tuple(msg['id'][1]) == self.value:
+            # someone got handed our id
+            nmsg = self.mkmsg()
+            nmsg['type'] = 'recon'
+            self.sendmsg(nmsg, addr)
             return
         self.peers[addr] = tuple(msg['id'])
         nmsg = self.mkmsg()
@@ -171,6 +305,7 @@ class Broadcaster(object):
             # something's broke
             return
         self.peers[addr] = tuple(msg['id'])
+        self.lace_max = tuple(msg['newlm'])
         # clean house
         rem = []
         for a in self.peers:
@@ -191,6 +326,7 @@ class Broadcaster(object):
             if self.value == (0, 0):
                 # dafuq
                 return
+            self.clock = self.loadstamp(msg['itc'])
             # add whoever we're talking to as a temporary peer
             self.peers[addr] = tuple(msg['id'])
             nmsg = self.mkmsg()
@@ -200,10 +336,15 @@ class Broadcaster(object):
             # we are being greeted
             nmsg = self.mkmsg()
             nmsg['type'] = 'hello'
-            nmsg['value'] = self.get_next_addr(self.lace_max)
+            nlm = self.get_next_addr(self.lace_max)
+            nmsg['value'] = nlm
+            a, b = self.clock.fork()
+            self.clock = a
+            nmsg['itc'] = self.dumpstamp(b)
             self.sendmsg(nmsg, addr)
-            # XXX bump lace_max site-wide
-            self.lace_max = nmsg['value']
+            # bump lace_max site-wide
+            # XXX this is broken right now
+            self.lace_max = nlm
             nmsg = self.mkmsg()
             nmsg['type'] = 'newlm'
             nmsg['newlm'] = self.lace_max
