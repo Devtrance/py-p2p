@@ -20,7 +20,14 @@ class UDP(object):
 
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("", self.port))
+        try:
+            self.sock.bind(("", self.port))
+        except socket.error as e:
+            if e.errno == errno.EADDRINUSE:
+                # something is already there; just bind to anything for now
+                self.sock.bind(("", 0))
+            else:
+                raise e
         thread.start_new_thread(self.recv, ())
 
     def recv(self):
