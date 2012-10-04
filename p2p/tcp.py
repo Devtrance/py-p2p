@@ -18,15 +18,18 @@ class TCP(object):
         except socket.error as e:
             if e.errno == errno.EADDRINUSE:
                 # something is already there; just bind to anything for now
-                self.sock.bind(("", 0))
+                self.srv.bind(("", 0))
             else:
                 raise e
+        self.port = self.srv.getsockname()[1]
         thread.start_new_thread(self.accept, ())
 
     def connect(self, addr):
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         conn.connect(addr)
+        self.connected.fire(conn, addr)
         thread.start_new_thread(self.handle_conn, (conn, addr))
+        return conn
 
     def accept(self):
         self.srv.listen(5)
@@ -35,11 +38,12 @@ class TCP(object):
             thread.start_new_thread(self.handle_conn, (conn, addr))
 
     def handle_conn(self, conn, addr):
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.connected.fire(conn, addr)
         buff = ""
         while True:
             msg, buff = self.read_msg(conn, buff)
-            self.handlers.fire(msg, conn)
+            self.handlers.threadfire(msg, conn)
 
     def read_msg(self, conn, buff=""):
         while len(buff) < 4:
@@ -49,6 +53,7 @@ class TCP(object):
         while len(buff) < msgsize:
             buff += conn.recv(1024)
         msg = buff[:msgsize]
+        buff = buff[msgsize:]
         return msg, buff
 
     def send(self, msg, conn):
@@ -60,7 +65,7 @@ class TCP(object):
 
     def shutdown(self):
         try:
-            self.sock.shutdown(socket.SHUT_RDWR)
+            self.srv.shutdown(socket.SHUT_RDWR)
             self.sock.close()
         except: # nobody cares
             pass
