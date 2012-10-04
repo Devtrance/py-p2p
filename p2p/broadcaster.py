@@ -43,6 +43,7 @@ class Broadcaster(object):
         self.fails = []
         self.yields = []
         self.grants = []
+        self.testid = 0
 
     def base(self):
         self.value = self.lace_max = (1, 1)
@@ -111,6 +112,7 @@ class Broadcaster(object):
             'needpeer': self.handle_msg_needpeer,
             'recon': self.handle_msg_recon,
             'maekawa': self.handle_msg_maekawa,
+            'bumptid': self.handle_msg_bumptid,
         }
         with self.lock:
             msg = json.loads(msg)
@@ -192,6 +194,7 @@ class Broadcaster(object):
             a = self.ev.wait(1)
             if not a:
                 print "fail on", self.bc.udp.sock.getsockname()[1]
+                print self.bc.fails, self.bc.yields, self.bc.grants
                 raise RuntimeError
 
         def __exit__(self, type, value, traceback):
@@ -199,6 +202,16 @@ class Broadcaster(object):
 
     def mutex(self):
         return self.mutob(self)
+
+    def bumptid(self):
+        self.testid += 1
+        m = self.mkmsg('bumptid')
+        m['testid'] = self.testid
+        self.broadcast(m)
+
+    def handle_msg_bumptid(self, msg, addr, reply):
+        self.broadcast(msg)
+        self.testid = msg['testid']
 
     def handle_msg_maekawa(self, msg, addr, reply):
         '''
@@ -243,6 +256,8 @@ class Broadcaster(object):
         elif msg['maekawa'] == 'yield':
             self.maeq.append(addr)
             addr = self.maeq.pop()
+            nmsg['maekawa'] = 'grant'
+            self.grant = addr
         elif msg['maekawa'] == 'release':
             if addr != self.grant:
                 print "what"
@@ -259,6 +274,10 @@ class Broadcaster(object):
         elif msg['maekawa'] == 'fail':
             self.fails.append(addr)
             return
+        if not nmsg.has_key('maekawa'):
+            print "shitbgs"
+            print msg
+            print nmsg
         self.sendmsg(nmsg, addr)
 
     def handle_msg_newlm(self, msg, addr, reply):
