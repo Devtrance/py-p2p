@@ -12,10 +12,17 @@ class Event(object):
         self.hooks.remove(gone)
         return self
 
-    def fire(self, *args, **kwargs):
+    def threadfire(self, *args, **kwargs):
         for hook in self.hooks:
             try:
                 thread.start_new_thread(hook, args, kwargs)
+            except:
+                continue
+
+    def fire(self, *args, **kwargs):
+        for hook in self.hooks:
+            try:
+                hook(*args, **kwargs)
             except:
                 continue
 

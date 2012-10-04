@@ -85,7 +85,7 @@ class UDP(object):
         msguuid = uuid.uuid4().bytes
         for count in xrange(total):
             tmp = "splinter" + msguuid + struct.pack("!HH", total, count) + msg[20000*count:20000*(count+1)]
-            self.send(tmp, dst)            
+            self.send(tmp, dst)
 
     def send(self, msg, dst):
         if len(msg) > 40000: # arbitrary

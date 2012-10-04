@@ -7,6 +7,7 @@ import time
 import base64
 
 import udp
+import tcp
 import timer
 import event
 import mrq
@@ -22,14 +23,18 @@ class Broadcaster(object):
     '''
     def __init__(self, bootstrap=(), port=6966, heartbeat=30, joincb=None):
         self.peers = {}
-        self.id = uuid.uuid4().hex
+        self.uuid = uuid.uuid4().int
         self.value = (0, 0)
         self.lace_max = (0, 0)
         self.udp = udp.UDP(port)
+        self.tcp = tcp.TCP(port)
         self.seen = mrq.MRQ(2500)
-        self.possibles = mrq.MRQ(50)
-        self.udp.handlers += self.handle_msg
+        self.udp.handlers += self.handle_udp_msg
+        self.tcp.handlers += self.handle_tcp_msg
+        self.tcp.connected += self.new_tcp_conn
+        self.tcpconns = {}
         self.lock = threading.RLock()
+        self.plock = threading.RLock()
         self.timer = timer.Timer(heartbeat)
         self.handlers = event.Event()
         self.boot = bootstrap
@@ -40,14 +45,19 @@ class Broadcaster(object):
         self.grant = None
         self.maeq = []
         self.mutexed = False
-        self.fails = []
-        self.yields = []
-        self.grants = []
+        self.fails = 0
+        self.yields = 0
+        self.grants = 0
         self.testid = 0
 
     def base(self):
         self.value = self.lace_max = (1, 1)
         self.clock = itc.Stamp()
+
+    def addpeer(self, pid, contact):
+        pl = self.peers.get(pid, {'contact': None, 'value': (0, 0)})
+        pl['contact'] = contact
+        self.peers[pid] = pl
 
     def dumpstamp(self, stamp):
         return base64.b64encode(stamp.dump())
@@ -57,21 +67,23 @@ class Broadcaster(object):
 
     def start(self):
         self.udp.start()
+        self.tcp.start()
         if self.boot:
             self.bootstrap(self.boot)
         self.timer.start()
 
     def stop(self):
         with self.lock:
-            for p in self.peers:
+            for p in self.peers.values():
                 self.bye(p)
             self.timer.disable()
             self.udp.shutdown()
+            self.tcp.shutdown()
 
     def mkmsg(self, msgtype='noop'):
         msg = {}
         msg['type'] = msgtype
-        msg['id'] = (self.id, self.value)
+        msg['id'] = (self.uuid, self.value)
         msg['stamp'] = uuid.uuid4().int
         if self.clock:
             msg['clock'] = self.dumpstamp(self.clock.peek())
@@ -98,9 +110,18 @@ class Broadcaster(object):
         msg = self.mkmsg()
         msg['type'] = 'hello'
         for p in plist:
-            self.sendmsg(msg, p)
+            self.sendmsg_raw(msg, p)
 
-    def handle_msg(self, msg, addr):
+    def new_tcp_conn(self, conn, addr):
+        self.tcpconns[addr] = conn
+
+    def handle_udp_msg(self, msg, addr):
+        self.handle_msg(msg, addr, 'udp')
+
+    def handle_tcp_msg(self, msg, conn):
+        self.handle_msg(msg, conn.getsockname(), 'tcp')
+
+    def handle_msg(self, msg, addr, proto):
         '''
         msg is a json-encoded message, and addr is an (ip, port) tuple
         '''
@@ -112,6 +133,8 @@ class Broadcaster(object):
             'needpeer': self.handle_msg_needpeer,
             'recon': self.handle_msg_recon,
             'maekawa': self.handle_msg_maekawa,
+            'wanttcp': self.handle_msg_wanttcp,
+            'havetcp': self.handle_msg_havetcp,
             'bumptid': self.handle_msg_bumptid,
         }
         with self.lock:
@@ -120,9 +143,6 @@ class Broadcaster(object):
             src = src[0], src[1]
             if not msg.get('src', None):
                 msg['src'] = src
-            else:
-                self.possibles += src
-            self.possibles += addr
             if msg['stamp'] in self.seen:
                 return
             self.seen += msg['stamp']
@@ -131,7 +151,8 @@ class Broadcaster(object):
                 msg = self.mkmsg()
                 msg['type'] = 'oncedata'
                 msg['data'] = data
-                self.sendmsg(msg, src)
+                if proto == 'udp':
+                    self.sendmsg_raw_udp(msg, src)
             fun = msglist.get(msg['type'], lambda a, b, c: True)
             fun(msg, addr, reply)
 
@@ -193,8 +214,8 @@ class Broadcaster(object):
             self.bc.acquire(self.ev.set)
             a = self.ev.wait(1)
             if not a:
-                print "fail on", self.bc.udp.sock.getsockname()[1]
-                print self.bc.fails, self.bc.yields, self.bc.grants
+                print "fail on", self.bc.uuid
+                print self.bc.fails, self.bc.yields, self.bc.grants, self.bc.mutexed
                 raise RuntimeError
 
         def __exit__(self, type, value, traceback):
@@ -209,6 +230,18 @@ class Broadcaster(object):
         m['testid'] = self.testid
         self.broadcast(m)
 
+    def handle_msg_wanttcp(self, msg, addr, reply):
+        port = msg['port']
+        ip = addr[0]
+        conn = self.tcp.connect((ip, port))
+        self.addpeer(msg['id'][0], conn)
+        nmsg = self.mkmsg('havetcp')
+        nmsg['port'] = conn.getsockname()[1]
+        self.sendmsg(nmsg, msg['id'][0])
+
+    def handle_msg_havetcp(self, msg, addr, reply):
+        self.addpeer(msg['id'][0], self.tcpconns[(addr[0], msg['port'])])
+
     def handle_msg_bumptid(self, msg, addr, reply):
         self.broadcast(msg)
         self.testid = msg['testid']
@@ -217,9 +250,10 @@ class Broadcaster(object):
         '''
         Implements Maekawa's distributed mutex.
         '''
-        if not addr in self.peers:
+        msgid = msg['id'][0]
+        if not msgid in self.peers:
             # who the hell is this?
-            print "bad msg", msg['id'][1]
+            print "bad msg", msg['id'], self.peers
             return
         if not msg.has_key('maekawa'):
             print "what the fuck"
@@ -229,56 +263,53 @@ class Broadcaster(object):
         if msg['maekawa'] == 'request':
             if not self.grant:
                 nmsg['maekawa'] = 'grant'
-                self.grant = addr
+                self.grant = msgid
             else:
-                self.maeq.append(addr)
-                if self.peers[self.grant][0] > msg['id'][0]:
+                self.maeq.append(msgid)
+                if self.grant > msg['id'][0]:
                     # current grant has greater "priority"
                     nmsg['maekawa'] = 'fail'
                 else:
                     nmsg['maekawa'] = 'inquire'
         elif msg['maekawa'] == 'grant':
-            self.grants.append(addr)
-            if len(self.grants) == len(self.peers):
+            self.grants += 1
+            if self.grants == len(self.peers):
                 self.mutexed = True
-                self.fails = []
-                self.yields = []
-                self.grants = []
+                self.fails = 0
+                self.yields = 0
+                self.grants = 0
                 if self.acqcb:
                     self.acqcb()
                 self.acqcb = None
             return
         elif msg['maekawa'] == 'inquire':
-            if len(self.fails) > 0 or len(self.yields) > 0:
+            if self.fails > 0 or self.yields > 0:
                 nmsg['maekawa'] = 'yield'
+                self.yields += 1
             else:
                 return # no answer?
         elif msg['maekawa'] == 'yield':
-            self.maeq.append(addr)
-            addr = self.maeq.pop()
+            self.maeq.append(msgid)
+            msgid = self.maeq.pop()
             nmsg['maekawa'] = 'grant'
-            self.grant = addr
+            self.grant = msgid
         elif msg['maekawa'] == 'release':
-            if addr != self.grant:
+            if msgid != self.grant:
                 print "what"
                 return
             self.grant = None
-            if addr in self.maeq:
-                self.maeq.remove(addr)
+            #if msgid in self.maeq:
+            #    self.maeq.remove(msgid)
             if self.maeq:
-                addr = self.maeq.pop()
-                self.grant = addr
+                msgid = self.maeq.pop()
+                self.grant = msgid
                 nmsg['maekawa'] = 'grant'
             else:
                 return
         elif msg['maekawa'] == 'fail':
-            self.fails.append(addr)
+            self.fails += 1
             return
-        if not nmsg.has_key('maekawa'):
-            print "shitbgs"
-            print msg
-            print nmsg
-        self.sendmsg(nmsg, addr)
+        self.sendmsg(nmsg, msgid)
 
     def handle_msg_newlm(self, msg, addr, reply):
         '''
@@ -310,11 +341,12 @@ class Broadcaster(object):
             nmsg['type'] = 'recon'
             self.sendmsg(nmsg, addr)
             return
-        self.peers[addr] = tuple(msg['id'])
+        pid = msg['id'][0]
+        self.addpeer(pid, addr)
         nmsg = self.mkmsg()
         nmsg['type'] = 'newpeer'
         nmsg['newlm'] = self.lace_max
-        self.sendmsg(nmsg, addr)
+        self.sendmsg(nmsg, pid)
 
     def handle_msg_newpeer(self, msg, addr, reply):
         '''
@@ -323,15 +355,20 @@ class Broadcaster(object):
         if not self.ispeer(msg['id'][1]):
             # something's broke
             return
-        self.peers[addr] = tuple(msg['id'])
+        self.addpeer(msg['id'][0], addr)
+        self.peers[msg['id'][0]]['value'] = msg['id'][1]
         self.lace_max = tuple(msg['newlm'])
         # clean house
         rem = []
         for a in self.peers:
-            if not self.ispeer(self.peers[a][1]):
+            if not self.ispeer(self.peers[a]['value']):
                 rem.append(a)
         for r in rem:
             del self.peers[r]
+        pid = msg['id'][0]
+        nmsg = self.mkmsg('wanttcp')
+        nmsg['port'] = self.tcp.port
+        self.sendmsg(nmsg, pid)
 
     def handle_msg_hello(self, msg, addr, reply):
         '''
@@ -347,12 +384,13 @@ class Broadcaster(object):
                 return
             self.clock = self.loadstamp(msg['itc'])
             # add whoever we're talking to as a temporary peer
-            self.peers[addr] = tuple(msg['id'])
+            self.addpeer(msg['id'][0], addr)
             nmsg = self.mkmsg()
             nmsg['type'] = 'needpeer'
             self.broadcast(nmsg)
         else:
             # we are being greeted
+            self.addpeer(msg['id'][0], addr)
             nmsg = self.mkmsg()
             nmsg['type'] = 'hello'
             nlm = self.get_next_addr(self.lace_max)
@@ -360,7 +398,7 @@ class Broadcaster(object):
             a, b = self.clock.fork()
             self.clock = a
             nmsg['itc'] = self.dumpstamp(b)
-            self.sendmsg(nmsg, addr)
+            self.sendmsg(nmsg, msg['id'][0])
             # bump lace_max site-wide
             # XXX this is broken right now
             self.lace_max = nlm
@@ -374,7 +412,18 @@ class Broadcaster(object):
             for peer in self.peers:
                 self.sendmsg(msg, peer)
 
-    def sendmsg(self, msg, addr):
+    def sendmsg(self, msg, peerid):
+        if self.uuid == peerid:
+            return
+        self.seen += msg['stamp']
+        msg = json.dumps(msg)
+        ct = self.peers[peerid]['contact']
+        if type(ct) == tuple:
+            self.udp.send(msg, ct)
+        else:
+            self.tcp.send(msg, ct)
+
+    def sendmsg_raw(self, msg, addr):
         self.seen += msg['stamp']
         msg = json.dumps(msg)
         self.udp.send(msg, addr)
