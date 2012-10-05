@@ -120,18 +120,6 @@ class Broadcaster(object):
         '''
         msg is a json-encoded message, and addr is an (ip, port) tuple
         '''
-        # XXX do something fancy with getaddr here
-        msglist = {
-            'hello': self.handle_msg_hello,
-            'newlm': self.handle_msg_newlm,
-            'newpeer': self.handle_msg_newpeer,
-            'needpeer': self.handle_msg_needpeer,
-            'recon': self.handle_msg_recon,
-            'maekawa': self.handle_msg_maekawa,
-            'wanttcp': self.handle_msg_wanttcp,
-            'havetcp': self.handle_msg_havetcp,
-            'bumptid': self.handle_msg_bumptid,
-        }
         with self.lock:
             msg = json.loads(msg)
             src = msg.get('src', None) or addr
@@ -148,8 +136,12 @@ class Broadcaster(object):
                 msg['data'] = data
                 if proto == 'udp':
                     self.sendmsg_raw_udp(msg, src)
-            fun = msglist.get(msg['type'], lambda a, b, c: True)
-            fun(msg, addr, reply)
+            try:
+                handler = getattr(self, "handle_msg_%s"%msg['type'])
+            except AttributeError:
+                print "no such handler"
+                return
+            handler(msg, addr, reply)
 
     def get_next_addr(self, addr):
         '''
