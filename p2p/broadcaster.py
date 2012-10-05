@@ -5,14 +5,15 @@ import threading
 import uuid
 import time
 import base64
-import heapq
+
+import itc
 
 import udp
 import tcp
 import timer
 import event
 import mrq
-import itc
+import maekawa
 
 class Broadcaster(object):
     '''
@@ -41,18 +42,8 @@ class Broadcaster(object):
         self.boot = bootstrap
         self.joincb = joincb
         self.clock = None
-        # maekawa state variables
         self.testid = 0
-        self.acqcb = None     # the callback invoked when the mutex is acquired
-        self.grant = None     # the id of the peer we have given our "grant" toekn
-        self.maeq = []        # a queue of requests
-        self.mutexed = False  # whether we have the mutex
-        self.fails = set()    # a set of peers who have rejected our request
-        self.yields = set()   # a set of peers we have yielded our request to
-        self.grants = set()   # the peers we have grant tokens from
-        self.grantseq = None  # the sequence number for the peer we have given our grant token
-        self.reqseq = None    # the sequence number for our grant request
-        self.inquires = set() # a set of peers who have sent us 'inquire' messages, in case we decide to yield
+        self.mk = maekawa.MaekawaNode(self)
 
     def base(self):
         self.value = self.lace_max = (1, 1)
@@ -196,22 +187,11 @@ class Broadcaster(object):
 
     def acquire(self, acqcb=None):
         with self.lock:
-            self.acqcb = acqcb
-            self.seeking = True
-            msg = self.mkmsg('maekawa')
-            msg['maekawa'] = 'request'
-            msg['seq'] = uuid.uuid4().int
-            self.broadcast(msg)
+            self.mk.acquire(acqcb)
 
     def release(self):
         with self.lock:
-            if not self.mutexed:
-                return
-            self.mutexed = False
-            msg = self.mkmsg('maekawa')
-            msg['maekawa'] = 'release'
-            msg['seq'] = self.reqseq
-            self.broadcast(msg)
+            self.mk.release()
 
     class mutob(object):
         def __init__(self, bc):
@@ -223,7 +203,7 @@ class Broadcaster(object):
             a = self.ev.wait(1)
             if not a:
                 print "fail on", self.bc.uuid % 997
-                print len(self.bc.fails), len(self.bc.yields), len(self.bc.grants), self.bc.mutexed
+                print len(self.bc.mk.fails), len(self.bc.mk.yields), len(self.bc.mk.grants), self.bc.mk.mutexed
                 raise RuntimeError
 
         def __exit__(self, type, value, traceback):
@@ -257,92 +237,7 @@ class Broadcaster(object):
         self.testid = msg['testid']
 
     def handle_msg_maekawa(self, msg, addr, reply):
-        '''
-        Implements Maekawa's distributed mutex.
-        '''
-        msgid = msg['id'][0]
-        if not msgid in self.peers and not msgid == self.uuid:
-            # who the hell is this?
-            return
-        if not msg.has_key('maekawa'):
-            return
-        nmsg = self.mkmsg('maekawa')
-        if msg['maekawa'] == 'request':
-            if not self.grant:
-                nmsg['maekawa'] = 'grant'
-                self.grant = msgid
-                self.grantseq = msg['seq']
-            else:
-                heapq.heappush(self.maeq, (msgid, msg['seq']))
-                if self.grant <= msg['id'][0]:
-                    # current grant has greater "priority", lower is better
-                    nmsg['maekawa'] = 'fail'
-                    nmsg['seq'] = msg['seq']
-                else:
-                    msgid = self.grant
-                    nmsg['maekawa'] = 'inquire'
-                    nmsg['seq'] = self.grantseq
-        elif msg['maekawa'] == 'grant':
-            self.grants.add(msgid)
-            if msgid in self.fails:
-                self.fails.remove(msgid)
-            if msgid in self.yields:
-                self.yields.remove(msgid)
-            if len(self.grants) == len(self.peers) + 1:
-                self.mutexed = True
-                self.fails = set()
-                self.yields = set()
-                self.grants = set()
-                self.inquires = set()
-                self.seeking = False
-                if self.acqcb:
-                    self.acqcb()
-                self.acqcb = None
-            return
-        elif msg['maekawa'] == 'inquire' and msg['seq'] == self.reqseq:
-            if self.fails > 0 or self.yields > 0:
-                nmsg['maekawa'] = 'yield'
-                nmsg['seq'] = self.reqseq
-                self.yields.add(msgid)
-                self.grants.remove(msgid) # let's see if this constraint holds...
-            else:
-                self.inquires.add((msgid, msg['seq']))
-                return # no answer?
-        elif msg['maekawa'] == 'yield' and msg['seq'] == self.grantseq:
-            newmsgid, newseq = heapq.heappop(self.maeq)
-            heapq.heappush(self.maeq, (msgid, msg['seq']))
-            msgid = newmsgid
-            nmsg['maekawa'] = 'grant'
-            nmsg['seq'] = newseq
-            self.grant = msgid
-            self.grantseq = newseq
-        elif msg['maekawa'] == 'release':
-            if msgid != self.grant:
-                return
-            self.grant = None
-            self.grantseq = None
-            if not self.maeq:
-                return
-            msgid, newseq = heapq.heappop(self.maeq)
-            self.grant = msgid
-            self.grantseq = newseq
-            nmsg['maekawa'] = 'grant'
-            nmsg['seq'] = newseq
-        elif msg['maekawa'] == 'fail' and msg['seq'] == self.reqseq:
-            self.fails.add(msgid)
-            for i, s in self.inquires:
-                tmsg = self.mkmsg('maekawa')
-                tmsg['maekawa'] = 'yield'
-                tmsg['seq'] = i
-                self.sendmsg(tmsg, i)
-                self.yields.add(i)
-                self.grants.remove(i)
-            self.inquires = []
-            return
-        else:
-            # dead messages
-            return
-        self.sendmsg(nmsg, msgid)
+        self.mk.handle_msg(msg)
 
     def handle_msg_newlm(self, msg, addr, reply):
         '''
