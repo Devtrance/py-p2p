@@ -17,7 +17,6 @@ class MaekawaNode(object):
 
     def acquire(self, acqcb=None):
         self.acqcb = acqcb
-        self.seeking = True
         msg = self.parent.mkmsg('maekawa')
         msg['maekawa'] = 'request'
         msg['seq'] = self.reqseq = uuid.uuid4().int
@@ -47,6 +46,8 @@ class MaekawaNode(object):
         nmsg = self.parent.mkmsg('maekawa')
         ans = handler(msg, msgid, nmsg)
         if ans:
+            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
+            print f
             self.parent.sendmsg(ans[0], ans[1])
 
     def handle_msg_request(self, msg, msgid, nmsg):
@@ -56,7 +57,7 @@ class MaekawaNode(object):
             self.grantseq = msg['seq']
         else:
             heapq.heappush(self.maeq, (msgid, msg['seq']))
-            if self.grant <= msg['id'][0]:
+            if self.grant <= msgid:
                 # current grant has greater "priority", lower is better
                 nmsg['maekawa'] = 'fail'
                 nmsg['seq'] = msg['seq']
@@ -78,7 +79,6 @@ class MaekawaNode(object):
             self.yields = set()
             self.grants = set()
             self.inquires = set()
-            self.seeking = False
             if self.acqcb:
                 self.acqcb()
             self.acqcb = None
@@ -86,13 +86,13 @@ class MaekawaNode(object):
     def handle_msg_inquire(self, msg, msgid, nmsg):
         if msg['seq'] != self.reqseq:
             return
-        if self.fails > 0 or self.yields > 0:
+        if len(self.fails) > 0 or len(self.yields) > 0:
             nmsg['maekawa'] = 'yield'
             nmsg['seq'] = self.reqseq
             self.yields.add(msgid)
-            self.grants.remove(msgid) # let's see if this constraint holds...
+            self.grants.remove(msgid)
         else:
-            self.inquires.add((msgid, msg['seq']))
+            self.inquires.add((msgid, self.grantseq))
             return # no answer?
         return nmsg, msgid
 
@@ -110,10 +110,12 @@ class MaekawaNode(object):
 
     def handle_msg_release(self, msg, msgid, nmsg):
         if msgid != self.grant or msg['seq'] != self.grantseq:
+            print "%03d I don't believe you"%(self.parent.uuid%997)
             return
         self.grant = None
         self.grantseq = None
-        if not self.maeq:
+        if len(self.maeq) == 0:
+            print "%03d noq"%(self.parent.uuid%997)
             return
         msgid, newseq = heapq.heappop(self.maeq)
         self.grant = msgid
@@ -127,10 +129,13 @@ class MaekawaNode(object):
             return
         self.fails.add(msgid)
         for i, s in self.inquires:
-            tmsg = self.mkmsg('maekawa')
+            tmsg = self.parent.mkmsg('maekawa')
             tmsg['maekawa'] = 'yield'
-            tmsg['seq'] = i
+            tmsg['seq'] = s
+            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(i%997), tmsg['maekawa']])
+            print f
             self.parent.sendmsg(tmsg, i)
             self.yields.add(i)
-            self.grants.remove(i)
-        self.inquires = []
+            if i in self.grants:
+                self.grants.remove(i)
+        self.inquires = set()
