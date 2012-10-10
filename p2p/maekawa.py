@@ -16,6 +16,7 @@ class MaekawaNode(object):
         self.reqseq = 0       # the sequence number for our grant request
         self.inquires = set() # a set of peers who have sent us 'inquire' messages, in case we decide to yield
         self.inquired = False # whether we have an outstanding 'inquire' message with our current grant
+        self.grantset = set() # the set of peers we need to get grant tickets from
 
     def acquire(self, acqcb=None):
         with self.lock:
@@ -24,6 +25,7 @@ class MaekawaNode(object):
             self.fails = set()
             self.grants = set()
             self.reqseq += 1
+            self.grantset = set(self.parent.peers.keys() + [self.parent.uuid])
             msg = self.parent.mkmsg('maekawa')
             msg['maekawa'] = 'request'
             msg['seq'] = self.reqseq
@@ -67,14 +69,14 @@ class MaekawaNode(object):
             print "no such handler"
             return
         msgid = msg['id'][0]
-        f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
-        print f
+        #f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
+        #print f
         nmsg = self.parent.mkmsg('maekawa')
         with self.lock:
             ans = handler(msg, msgid, nmsg)
         if ans:
-            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
-            print f
+            #f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
+            #print f
             self.parent.sendmsg(ans[0], ans[1])
 
     def handle_msg_request(self, msg, msgid, nmsg):
@@ -120,7 +122,7 @@ class MaekawaNode(object):
         if msg['seq'] != self.reqseq:
             return
         self.grants.add(msgid)
-        if len(self.grants) == len(self.parent.peers) + 1: #XXX find a better way to express this
+        if self.grants == self.grantset:
             self.mutexed = True
             self.acqcb()
 
@@ -130,7 +132,7 @@ class MaekawaNode(object):
     	with a 'yield'.  Otherwise just store the request in case
     	we get a failure at some other point.
         '''
-        if not msg['seq'] == self.reqseq:
+        if self.mutexed or not msg['seq'] == self.reqseq:
             return
         if len(self.fails) > 0:
             nmsg['maekawa'] = 'yield'
