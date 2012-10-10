@@ -13,6 +13,7 @@ class TCP(object):
 
     def start(self):
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             self.srv.bind(("", self.port))
         except socket.error as e:
@@ -26,7 +27,11 @@ class TCP(object):
 
     def connect(self, addr):
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        conn.connect(addr)
+        try:
+            conn.connect(addr)
+        except socket.error as e:
+            if e.errno == errno.ECONNREFUSED:
+                return None
         self.connected.fire(conn, addr)
         thread.start_new_thread(self.handle_conn, (conn, addr))
         return conn
@@ -60,8 +65,7 @@ class TCP(object):
 	    # pepper me with exceptions, for when TCP falls on its
     	# stupid face
         msgsize = struct.pack("!I", len(msg))
-        conn.send(msgsize)
-        conn.send(msg)
+        conn.send(msgsize + msg)
 
     def shutdown(self):
         try:

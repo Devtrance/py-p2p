@@ -8,7 +8,6 @@ import base64
 
 import itc
 
-import udp
 import tcp
 import timer
 import event
@@ -24,17 +23,15 @@ class Broadcaster(object):
     going on, here.
     '''
     def __init__(self, bootstrap=(), port=6966, heartbeat=30, joincb=None):
+        self.c = 0
         self.peers = {}
+        self.clist = {}
         self.uuid = uuid.uuid4().int
         self.value = (0, 0)
         self.lace_max = (0, 0)
-        self.udp = udp.UDP(port)
         self.tcp = tcp.TCP(port)
         self.seen = mrq.MRQ(2500)
-        self.udp.handlers += self.handle_udp_msg
         self.tcp.handlers += self.handle_tcp_msg
-        self.tcp.connected += self.new_tcp_conn
-        self.tcpconns = {}
         self.lock = threading.RLock()
         self.plock = threading.RLock()
         self.timer = timer.Timer(heartbeat)
@@ -61,7 +58,6 @@ class Broadcaster(object):
         return itc.Stamp.load(base64.b64decode(stampstr))
 
     def start(self):
-        self.udp.start()
         self.tcp.start()
         if self.boot:
             self.bootstrap(self.boot)
@@ -72,7 +68,6 @@ class Broadcaster(object):
             for p in self.peers.values():
                 self.bye(p)
             self.timer.disable()
-            self.udp.shutdown()
             self.tcp.shutdown()
 
     def mkmsg(self, msgtype='noop'):
@@ -80,6 +75,7 @@ class Broadcaster(object):
         msg['type'] = msgtype
         msg['id'] = (self.uuid, self.value)
         msg['stamp'] = uuid.uuid4().int
+        msg['srvport'] = self.tcp.port
         if self.clock:
             msg['clock'] = self.dumpstamp(self.clock.peek())
         return msg
@@ -102,40 +98,38 @@ class Broadcaster(object):
             self.sendmsg(msg, dst)
 
     def bootstrap(self, plist):
-        msg = self.mkmsg()
-        msg['type'] = 'hello'
+        msg = self.mkmsg('hello')
         for p in plist:
             self.sendmsg_raw(msg, p)
 
-    def new_tcp_conn(self, conn, addr):
-        self.tcpconns[addr] = conn
-
-    def handle_udp_msg(self, msg, addr):
-        self.handle_msg(msg, addr, 'udp')
-
     def handle_tcp_msg(self, msg, conn):
-        self.handle_msg(msg, conn.getsockname(), 'tcp')
+        self.handle_msg(msg, conn)
 
-    def handle_msg(self, msg, addr, proto):
+    def handle_msg(self, msg, conn):
         '''
-        msg is a json-encoded message, and addr is an (ip, port) tuple
+        msg is a json-encoded message
         '''
+        if conn:
+            addr = conn.getpeername()
+        else:
+            addr = (0, 0)
+        if not addr in self.clist and not addr == (0, 0):
+            self.clist[addr] = conn
         with self.lock:
             msg = json.loads(msg)
+            if msg['stamp'] in self.seen:
+                return
+            self.seen += msg['stamp']
             src = msg.get('src', None) or addr
             src = src[0], src[1]
             if not msg.get('src', None):
                 msg['src'] = src
-            if msg['stamp'] in self.seen:
-                return
-            self.seen += msg['stamp']
             addr = tuple(msg['src'])
             def reply(data):
-                msg = self.mkmsg()
-                msg['type'] = 'oncedata'
-                msg['data'] = data
-                if proto == 'udp':
-                    self.sendmsg_raw_udp(msg, src)
+                rmsg = self.mkmsg()
+                rmsg['type'] = 'oncedata'
+                rmsg['data'] = data
+                self.sendmsg(rmsg, msg['id'])
             try:
                 handler = getattr(self, "handle_msg_%s"%msg['type'])
             except AttributeError:
@@ -210,20 +204,6 @@ class Broadcaster(object):
         m['testid'] = self.testid
         self.broadcast(m)
 
-    def handle_msg_wanttcp(self, msg, addr, reply):
-        port = msg['port']
-        ip = addr[0]
-        conn = self.tcp.connect((ip, port))
-        self.addpeer(msg['id'][0], conn)
-        self.peers[msg['id'][0]]['value'] = msg['id'][1]
-        nmsg = self.mkmsg('havetcp')
-        nmsg['port'] = conn.getsockname()[1]
-        self.sendmsg(nmsg, msg['id'][0])
-
-    def handle_msg_havetcp(self, msg, addr, reply):
-        self.addpeer(msg['id'][0], self.tcpconns[(addr[0], msg['port'])])
-        self.peers[msg['id'][0]]['value'] = msg['id'][1]
-
     def handle_msg_bumptid(self, msg, addr, reply):
         self.broadcast(msg)
         self.testid = msg['testid']
@@ -262,7 +242,12 @@ class Broadcaster(object):
             self.sendmsg(nmsg, addr)
             return
         pid = msg['id'][0]
-        self.addpeer(pid, addr)
+        if not addr in self.clist:
+            conn = self.tcp.connect(addr)
+            if not conn:
+                conn = self.tcp.connect((addr[0], msg['srvport']))
+            self.clist[addr] = conn
+        self.addpeer(pid, self.clist[addr])
         self.peers[msg['id'][0]]['value'] = msg['id'][1]
         nmsg = self.mkmsg()
         nmsg['type'] = 'newpeer'
@@ -276,7 +261,7 @@ class Broadcaster(object):
         if not self.ispeer(msg['id'][1]):
             # something's broke
             return
-        self.addpeer(msg['id'][0], addr)
+        self.addpeer(msg['id'][0], self.clist[addr])
         self.peers[msg['id'][0]]['value'] = msg['id'][1]
         self.lace_max = tuple(msg['newlm'])
         # clean house
@@ -286,47 +271,40 @@ class Broadcaster(object):
                 rem.append(a)
         for r in rem:
             del self.peers[r]
-        pid = msg['id'][0]
-        nmsg = self.mkmsg('wanttcp')
-        nmsg['port'] = self.tcp.port
-        self.sendmsg(nmsg, pid)
+
+    def handle_msg_welcome(self, msg, addr, reply):
+        if self.value != (0, 0):
+            print "what"
+            return
+        # we are new
+        self.value = tuple(msg['value'])
+        if self.value == (0, 0):
+            # dafuq
+            return
+        self.clock = self.loadstamp(msg['itc'])
+        # add whoever we're talking to as a temporary peer
+        self.addpeer(msg['id'][0], self.clist[addr])
+        self.peers[msg['id'][0]]['value'] = msg['id'][1]
+        nmsg = self.mkmsg()
+        nmsg['type'] = 'needpeer'
+        self.broadcast(nmsg)
 
     def handle_msg_hello(self, msg, addr, reply):
-        '''
-	    Handle the 'hello' message.  Either we are already in the
-    	lace, in which case we are being greeted by a new member,
-	    or we are the new member getting a greeting in reply.
-        '''
-        if self.value == (0, 0):
-            # we are new
-            self.value = tuple(msg['value'])
-            if self.value == (0, 0):
-                # dafuq
-                return
-            self.clock = self.loadstamp(msg['itc'])
-            # add whoever we're talking to as a temporary peer
-            self.addpeer(msg['id'][0], addr)
-            self.peers[msg['id'][0]]['value'] = msg['id'][1]
-            nmsg = self.mkmsg()
-            nmsg['type'] = 'needpeer'
-            self.broadcast(nmsg)
-        else:
-            # we are being greeted
-            nmsg = self.mkmsg()
-            nmsg['type'] = 'hello'
-            nlm = self.get_next_addr(self.lace_max)
-            nmsg['value'] = nlm
-            a, b = self.clock.fork()
-            self.clock = a
-            nmsg['itc'] = self.dumpstamp(b)
-            self.sendmsg_raw(nmsg, addr)
-            # bump lace_max site-wide
-            # XXX this is broken right now
-            self.lace_max = nlm
-            nmsg = self.mkmsg()
-            nmsg['type'] = 'newlm'
-            nmsg['newlm'] = self.lace_max
-            self.broadcast(nmsg)            
+        # we are being greeted
+        nmsg = self.mkmsg()
+        nmsg['type'] = 'welcome'
+        nlm = self.get_next_addr(self.lace_max)
+        nmsg['value'] = nlm
+        a, b = self.clock.fork()
+        self.clock = a
+        nmsg['itc'] = self.dumpstamp(b)
+        self.sendmsg_raw(nmsg, addr)
+        # bump lace_max site-wide
+        # XXX this is broken right now
+        self.lace_max = nlm
+        nmsg = self.mkmsg('newlm')
+        nmsg['newlm'] = self.lace_max
+        self.broadcast(nmsg)
 
     def broadcast(self, msg):
         with self.lock:
@@ -338,17 +316,20 @@ class Broadcaster(object):
         if self.uuid == peerid:
             if msg['type'] == 'maekawa':
                 msg['stamp'] = uuid.uuid4().int # newstamp
-                self.handle_msg(json.dumps(msg), (0, 0), None)
+                self.handle_msg(json.dumps(msg), None)
             return
         self.seen += msg['stamp']
         msg = json.dumps(msg)
         ct = self.peers[peerid]['contact']
-        if type(ct) == tuple:
-            self.udp.send(msg, ct)
-        else:
+        if ct:
             self.tcp.send(msg, ct)
 
     def sendmsg_raw(self, msg, addr):
         self.seen += msg['stamp']
         msg = json.dumps(msg)
-        self.udp.send(msg, addr)
+        if not addr in self.clist:
+            c = self.tcp.connect(addr)
+            self.clist[addr] = c
+        else:
+            c = self.clist[addr]
+        self.tcp.send(msg, c)
