@@ -189,7 +189,7 @@ class Broadcaster(object):
             a = self.ev.wait(1)
             if not a:
                 print "fail on", self.bc.uuid % 997
-                print len(self.bc.mk.fails), len(self.bc.mk.grants), self.bc.mk.mutexed
+                print len(self.bc.mk.fails), len(self.bc.mk.grants), len(self.bc.mk.grantset), self.bc.mk.mutexed
                 raise RuntimeError
 
         def __exit__(self, type, value, traceback):

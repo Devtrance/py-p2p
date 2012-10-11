@@ -20,20 +20,23 @@ class MaekawaNode(object):
 
     def acquire(self, acqcb=None):
         with self.lock:
+            if self.mutexed == True:
+                return
             self.acqcb = acqcb
             self.inquires = set()
             self.fails = set()
             self.grants = set()
             self.reqseq += 1
-            self.grantset = set(self.parent.peers.keys() + [self.parent.uuid])
             msg = self.parent.mkmsg('maekawa')
             msg['maekawa'] = 'request'
             msg['seq'] = self.reqseq
-            self.parent.broadcast(msg)
+            with self.parent.lock:
+                self.grantset = set(self.parent.peers.keys() + [self.parent.uuid])
+                self.parent.broadcast(msg)
 
     def release(self):
         with self.lock:
-            if not self.mutexed:
+            if self.mutexed == False:
                 return
             self.mutexed = False
             msg = self.parent.mkmsg('maekawa')
@@ -69,14 +72,14 @@ class MaekawaNode(object):
             print "no such handler"
             return
         msgid = msg['id'][0]
-        #f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
-        #print f
+        f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
+        print f
         nmsg = self.parent.mkmsg('maekawa')
         with self.lock:
             ans = handler(msg, msgid, nmsg)
         if ans:
-            #f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
-            #print f
+            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
+            print f
             self.parent.sendmsg(ans[0], ans[1])
 
     def handle_msg_request(self, msg, msgid, nmsg):
@@ -133,6 +136,7 @@ class MaekawaNode(object):
     	we get a failure at some other point.
         '''
         if self.mutexed or not msg['seq'] == self.reqseq:
+            print "bad inquire"
             return
         if len(self.fails) > 0:
             nmsg['maekawa'] = 'yield'
