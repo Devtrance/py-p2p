@@ -17,16 +17,18 @@ class MaekawaNode(object):
         self.inquires = set() # a set of peers who have sent us 'inquire' messages, in case we decide to yield
         self.inquired = False # whether we have an outstanding 'inquire' message with our current grant
         self.grantset = set() # the set of peers we need to get grant tickets from
+        self.started = False
 
     def acquire(self, acqcb=None):
         with self.lock:
-            if self.mutexed == True:
+            if self.started:
                 return
+            if self.mutexed:
+                raise RuntimeError
             self.acqcb = acqcb
             self.inquires = set()
             self.fails = set()
             self.grants = set()
-            self.reqseq += 1
             msg = self.parent.mkmsg('maekawa')
             msg['maekawa'] = 'request'
             msg['seq'] = self.reqseq
@@ -39,10 +41,13 @@ class MaekawaNode(object):
             if self.mutexed == False:
                 return
             self.mutexed = False
+            self.acqcb = None
+            self.reqseq += 1 # ARE YOU FUCKING KIDDING ME MOVING THIS HERE FIXED ALL THE BUGS WHAT THE SHITDICK
             msg = self.parent.mkmsg('maekawa')
             msg['maekawa'] = 'release'
             msg['seq'] = self.reqseq
             self.parent.broadcast(msg)
+            self.started = False
 
     @staticmethod
     def should_yield(msgid, msgseq, newid, newseq):
@@ -72,15 +77,23 @@ class MaekawaNode(object):
             print "no such handler"
             return
         msgid = msg['id'][0]
-        f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
-        print f
+#        f = " ".join(['recv', "%03d"%(msgid%997), ">>", "%03d"%(self.parent.uuid%997), msg['maekawa']])
+#        print f
         nmsg = self.parent.mkmsg('maekawa')
         with self.lock:
             ans = handler(msg, msgid, nmsg)
         if ans:
-            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
-            print f
+#            f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(ans[1]%997), ans[0]['maekawa']])
+#            print f
             self.parent.sendmsg(ans[0], ans[1])
+
+    def sendfail(self, nodeid, reqseq):
+        fmsg = self.parent.mkmsg('maekawa')
+        fmsg['maekawa'] = 'fail'
+        fmsg['seq'] = reqseq
+#        f = " ".join(['send', "%03d"%(self.parent.uuid%997), ">>", "%03d"%(nodeid%997), fmsg['maekawa']])
+#        print f
+        self.parent.sendmsg(fmsg, nodeid)
 
     def handle_msg_request(self, msg, msgid, nmsg):
         '''
@@ -127,7 +140,9 @@ class MaekawaNode(object):
         self.grants.add(msgid)
         if self.grants == self.grantset:
             self.mutexed = True
-            self.acqcb()
+            if self.acqcb:
+                self.acqcb()
+                self.acqcb = None
 
     def handle_msg_inquire(self, msg, msgid, nmsg):
         '''
@@ -182,5 +197,17 @@ class MaekawaNode(object):
             nmsg['seq'] = seq
             nmsg['maekawa'] = 'grant'
             self.inquired = False
+            # send a 'fail' message to every other node in the queue
+            # this isn't in the paper, but I'm pretty sure that it's necessary for the following scenario:
+            #   node A sends a request to node B, and B sends a grant to node A
+            #   node C sends a request to B and C
+            #   C gives a grant to itself, and node B compares the requests and sends an inquire to A
+            #   A declines to yield and eventually gains the lock
+            #   node B sends requests to itself and to C; B's request supersedes C's
+            #   A releases its lock, and B immediately grants its own request
+            #   C, meanwhile, sends itself an inquire
+            #   B and C deadlock, because C doesn't know B failed C's request.
+            for fseq, fid in self.maeq:
+                self.sendfail(fid, fseq)
             return nmsg, mid
 
