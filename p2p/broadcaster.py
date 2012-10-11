@@ -33,7 +33,7 @@ class Broadcaster(object):
         self.seen = mrq.MRQ(2500)
         self.tcp.handlers += self.handle_tcp_msg
         self.lock = threading.RLock()
-        self.plock = threading.RLock()
+        self.plock = threading.Lock()
         self.timer = timer.Timer(heartbeat)
         self.handlers = event.Event()
         self.boot = bootstrap
