@@ -1,4 +1,5 @@
 import heapq
+import threading
 
 class MRQ(object):
     '''
@@ -12,27 +13,31 @@ class MRQ(object):
         self.count = 0
         self.list = []
         self.set = set()
+        self.lock = threading.RLock()
 
     def add(self, obj):
-        if obj in self.set:
-            # this is slow...
-            self.list.remove(obj)
+        with self.lock:
+            if obj in self.set:
+                # this is slow...
+                self.list.remove(obj)
+                self.list.append(obj)
+                return
             self.list.append(obj)
-            return
-        self.list.append(obj)
-        self.set.add(obj)
-        self.count += 1
+            self.set.add(obj)
+            self.count += 1
 
     def remove(self):
-        o = self.list[0]
-        self.list = self.list[1:]
-        self.set.remove(o)
-        self.count -= 1        
+        with self.lock:
+            o = self.list[0]
+            self.list = self.list[1:]
+            self.set.remove(o)
+            self.count -= 1        
 
     def __iadd__(self, obj):
-        self.add(obj)
-        while self.count > self.limit:
-            self.remove()
+        with self.lock:
+            self.add(obj)
+            while self.count > self.limit:
+                self.remove()
         return self
 
     def __contains__(self, obj):
