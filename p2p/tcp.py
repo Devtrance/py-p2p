@@ -39,7 +39,11 @@ class TCP(object):
     def accept(self):
         self.srv.listen(5)
         while True:
-            conn, addr = self.srv.accept()
+            try:
+                conn, addr = self.srv.accept()
+            except socket.error as e:
+                if e.errno == errno.ECONNABORTED:
+                    continue
             thread.start_new_thread(self.handle_conn, (conn, addr))
 
     def handle_conn(self, conn, addr):
