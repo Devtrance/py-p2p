@@ -24,7 +24,7 @@ class MaekawaNode(object):
             if self.started:
                 return
             if self.mutexed:
-                raise RuntimeError
+                raise RuntimeError("bizzare truth values")
             self.acqcb = acqcb
             self.inquires = set()
             self.fails = set()
@@ -151,7 +151,7 @@ class MaekawaNode(object):
     	we get a failure at some other point.
         '''
         if self.mutexed or not msg['seq'] == self.reqseq:
-            print "bad inquire"
+            # this actually happens a lot
             return
         if len(self.fails) > 0:
             nmsg['maekawa'] = 'yield'

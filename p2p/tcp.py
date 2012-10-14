@@ -20,9 +20,9 @@ class TCP(object):
             if e.errno == errno.EADDRINUSE:
                 # something is already there; just bind to anything for now
                 self.srv.bind(("", 0))
+                self.port = self.srv.getsockname()[1]
             else:
                 raise e
-        self.port = self.srv.getsockname()[1]
         thread.start_new_thread(self.accept, ())
 
     def connect(self, addr):

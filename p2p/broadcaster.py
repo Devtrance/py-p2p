@@ -186,11 +186,11 @@ class Broadcaster(object):
 
         def __enter__(self):
             self.bc.acquire(self.ev.set)
-            a = self.ev.wait(1)
+            a = self.ev.wait(2)
             if not a:
                 print "fail on", self.bc.uuid % 997
                 print len(self.bc.mk.fails), len(self.bc.mk.grants), len(self.bc.mk.grantset), self.bc.mk.mutexed
-                raise RuntimeError
+                raise RuntimeError("deadlock")
 
         def __exit__(self, type, value, traceback):
             self.bc.release()
@@ -216,7 +216,10 @@ class Broadcaster(object):
         Handle 'newlm' message, bumping the lace_max
         '''
         self.broadcast(msg)
-        self.lace_max = tuple(msg['newlm'])
+        oclock = self.loadstamp(msg['clock'])
+        if self.clock <= oclock:
+            self.lace_max = tuple(msg['newlm'])
+            self.clock = self.clock + oclock
 
     def handle_msg_recon(self, msg, addr, reply):
         '''
@@ -302,9 +305,10 @@ class Broadcaster(object):
         # bump lace_max site-wide
         # XXX this is broken right now
         self.lace_max = nlm
-        nmsg = self.mkmsg('newlm')
-        nmsg['newlm'] = self.lace_max
-        self.broadcast(nmsg)
+        self.clock.event()
+        bmsg = self.mkmsg('newlm')
+        bmsg['newlm'] = self.lace_max
+        self.broadcast(bmsg)
 
     def broadcast(self, msg):
         with self.lock:
